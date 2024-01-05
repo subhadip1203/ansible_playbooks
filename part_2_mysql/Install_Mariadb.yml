@@ -1,0 +1,112 @@
+---
+- name: Update Ubuntu Server
+  hosts: ubuntu_servers
+  collections:
+    - community.mysql
+  become: yes
+
+  vars_files:
+    - vars.yml
+
+  tasks:
+    - name: Install Python 3
+      apt:
+        name: python3
+        state: present
+
+    - name: Install pip3
+      apt:
+        name: python3-pip
+        state: present
+
+    - name: Install required packages
+      apt:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - python3-dev
+        - default-libmysqlclient-dev
+        - build-essential
+        - pkg-config
+
+    - name: Install mysqlclient
+      pip:
+        name: mysqlclient
+        executable: pip3
+        state: present
+
+    - name: Set ansible_python_interpreter
+      set_fact:
+        ansible_python_interpreter: "/usr/bin/python3"
+
+    - name: Install MariaDB
+      apt:
+        name: mariadb-server
+        state: present
+
+    - name: Start and enable MariaDB service
+      service:
+        name: mariadb
+        state: started
+        enabled: yes
+
+    - name: Set root password and disallow root remote login
+      mysql_user:
+        column_case_sensitive: false
+        name: root
+        password: "{{ db_root_password }}"
+        login_password: "{{ db_root_password }}"
+        host: localhost
+        state: present
+
+    - name: Create user '{{ app_db_user }}' with a strong password
+      community.mysql.mysql_user:
+        column_case_sensitive: false
+        name: "{{ app_db_user }}"
+        password: "{{ app_db_user_password }}"
+        login_user: root
+        login_password: "{{ db_root_password }}"
+        state: present
+
+    - name: Grant remote access for '{{ app_db_user }}' from inventory hosts
+      community.mysql.mysql_user:
+        column_case_sensitive: false
+        name: "{{ app_db_user }}"
+        host: "{{ item }}"
+        password: "{{ app_db_user_password }}"
+        priv: "*.*:ALL"
+        login_user: root
+        login_password: "{{ db_root_password }}"
+        state: present
+      loop: "{{ groups['db_hosts'] }}" # Assuming hosts are in a group named 'db_hosts'
+
+    - name: Create database '{{ db_name }}'
+      community.mysql.mysql_db:
+        name: "{{ db_name }}"
+        login_user: root
+        login_password: "{{ db_root_password }}"
+        state: present
+
+    - name: Grant all privileges on '{{ db_name }}' to '{{ app_db_user }}'
+      community.mysql.mysql_user:
+        column_case_sensitive: false
+        name: "{{ app_db_user }}"
+        priv: "{{ db_name }}.*:ALL"
+        login_user: root
+        login_password: "{{ db_root_password }}"
+        append_privs: yes
+        state: present
+
+    - name: Execute SQL query to get MariaDB users
+      community.mysql.mysql_query:
+        login_user: root
+        login_password: "{{ db_root_password }}"
+        login_host: localhost
+        query: "SELECT User, Host FROM mysql.user"
+      register: mariadb_users
+      
+
+    
+    - name: Print all user and host information
+      shell: echo "{{ item.User }} - {{ item.Host }}"
+      loop: "{{ mariadb_users.query_result[0] }}"
